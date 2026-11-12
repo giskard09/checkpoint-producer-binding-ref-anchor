@@ -126,7 +126,11 @@ def recheck_inclusion_multi_rpc(block_number, recorded_block_hash, recorded_chai
         report["block_hash"] = observed_hash
         report["counts_toward_quorum"] = report["operator_id"] is not None
         if report["operator_id"] is None:
-            report["exclusion_reason"] = "operator_identity_unknown"
+            # Distinguish: no operator ID supplied (missing) vs. supplied but rejected (invalid).
+            if operator is None or (isinstance(operator, str) and not operator.strip(" \t")):
+                report["exclusion_reason"] = "operator_id_missing"
+            else:
+                report["exclusion_reason"] = "operator_id_invalid"
 
     qualifying = [r for r in reports if r["chain_view_qualifies"]]
     operator_ids = sorted({r["operator_id"] for r in qualifying if r["counts_toward_quorum"]})

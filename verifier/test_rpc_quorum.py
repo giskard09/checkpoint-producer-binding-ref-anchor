@@ -44,7 +44,7 @@ class OperatorQuorumTests(unittest.TestCase):
         self.assertEqual(result["operators_qualifying"], 1)
         self.assertEqual(result["endpoints_qualifying"], 3)
         self.assertEqual([r["exclusion_reason"] for r in result["reports"]],
-                         ["operator_identity_unknown", "operator_identity_unknown", None])
+                         ["operator_id_missing", "operator_id_missing", None])
 
     def test_only_unknown_operators_never_make_quorum(self):
         for minimum in (1, 2):
@@ -64,7 +64,7 @@ class OperatorQuorumTests(unittest.TestCase):
                 self.assertEqual(result["quorum_operator_ids"], [])
                 self.assertIsNone(result["reports"][0]["operator_id"])
                 self.assertFalse(result["reports"][0]["counts_toward_quorum"])
-                self.assertEqual(result["reports"][0]["exclusion_reason"], "operator_identity_unknown")
+                self.assertEqual(result["reports"][0]["exclusion_reason"], "operator_id_invalid")
                 self.assertEqual(check([endpoint("unknown", reserved)], 1)["status"], "unknown")
 
     def test_reserved_unknown_agrees_but_only_named_operators_make_quorum(self):
@@ -75,7 +75,7 @@ class OperatorQuorumTests(unittest.TestCase):
         self.assertEqual(result["operators_qualifying"], 2)
         self.assertEqual(result["operator_ids_qualifying"], ["provider-a", "provider-b"])
         self.assertEqual(result["quorum_operator_ids"], ["provider-a", "provider-b"])
-        self.assertEqual(result["reports"][2]["exclusion_reason"], "operator_identity_unknown")
+        self.assertEqual(result["reports"][2]["exclusion_reason"], "operator_id_invalid")
 
     def test_reserved_unknown_conflicting_view_blocks_two_named_operators(self):
         result = check([endpoint("a", "provider-a"), endpoint("b", "provider-b"),
@@ -240,7 +240,7 @@ class OperatorIdLineTerminatorTests(unittest.TestCase):
     Policy pinned here: only ASCII space and tab are trimmed. Any other
     whitespace/control character (including line terminators) makes the ID
     invalid: zero votes, operator_id None, stable exclusion reason
-    "operator_identity_unknown", and the raw value is never echoed.
+    "operator_id_invalid", and the raw value is never echoed.
     """
 
     INVALID = {
@@ -265,7 +265,7 @@ class OperatorIdLineTerminatorTests(unittest.TestCase):
                 result = check([endpoint("a", bad), endpoint("b", "provider-b")])
                 self.assertIsNone(result["reports"][0]["operator_id"])
                 self.assertFalse(result["reports"][0]["counts_toward_quorum"])
-                self.assertEqual(result["reports"][0]["exclusion_reason"], "operator_identity_unknown")
+                self.assertEqual(result["reports"][0]["exclusion_reason"], "operator_id_invalid")
                 self.assertEqual(result["operators_qualifying"], 1)
                 self.assertEqual(result["status"], "unknown")
                 self.assertEqual(result["reason_code"], "insufficient_operators")
@@ -327,7 +327,7 @@ class OperatorIdPositiveAndNonAsciiFixtures(unittest.TestCase):
             with self.subTest(operator=bad):
                 result = check([endpoint("a", bad), endpoint("b", "provider-b")])
                 self.assertIsNone(result["reports"][0]["operator_id"])
-                self.assertEqual(result["reports"][0]["exclusion_reason"], "operator_identity_unknown")
+                self.assertEqual(result["reports"][0]["exclusion_reason"], "operator_id_invalid")
                 self.assertEqual(result["operators_qualifying"], 1)
                 self.assertEqual(result["status"], "unknown")
 
