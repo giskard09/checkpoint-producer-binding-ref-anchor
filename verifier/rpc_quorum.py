@@ -4,9 +4,15 @@ Standard-library only so the quorum policy can be tested without RPC access
 or the signature verifier's cryptographic dependencies.
 """
 import datetime
+import re
 
 
 def _operator_id(value):
+    """v0 canonicalizer: returns the normalized ID, or None for any invalid/missing input.
+
+    Missing and invalid are both expressed as None; the caller produces the
+    single reason code ``operator_identity_unknown`` for either case.
+    """
     if not isinstance(value, str):
         return None
     # Reject non-ASCII BEFORE any case normalization: casefold() would otherwise
@@ -20,6 +26,40 @@ def _operator_id(value):
         return None
     allowed = "abcdefghijklmnopqrstuvwxyz0123456789._-"
     return normalized if normalized and all(c in allowed for c in normalized) else None
+
+
+def _classify_operator_id_v1(value):
+    """v1 canonicalizer: returns (normalized_id_or_None, exclusion_reason_or_None).
+
+    Splits the old ``operator_identity_unknown`` into two distinct codes:
+    ``operator_id_missing`` — no identity supplied (2‑tuple form, ``None``,
+    empty or whitespace-only after trimming ASCII space/tab).
+    ``operator_id_invalid`` — identity supplied but rejected (non‑string type,
+    non‑ASCII, fails the 1‑64‑character slug rule, or reserved word ``unknown``).
+    A lone ``\\n`` is invalid (trim strips only space/tab, then the slug regex
+    rejects it), which keeps the 43643cb fixture behaviour.
+    """
+    # --- missing ---
+    if isinstance(value, tuple):
+        return None, "operator_id_missing"
+    if value is None:
+        return None, "operator_id_missing"
+    if not isinstance(value, str):
+        return None, "operator_id_invalid"
+    stripped = value.strip(" \t")
+    if not stripped:
+        return None, "operator_id_missing"
+    if not stripped.isascii():
+        return None, "operator_id_invalid"
+    normalized = stripped.lower()
+    if normalized == "unknown":
+        return None, "operator_id_invalid"
+    # 1-64 slug rule: start/end with letter or digit, interior may contain
+    # dots, underscores, hyphens.  Fullmatch (not match+$) so trailing LF
+    # is rejected: a lone "\n" is invalid, and "provider-a\n" is invalid.
+    if not re.fullmatch(r"[a-z0-9](?:[a-z0-9._-]{0,62}[a-z0-9])?", normalized):
+        return None, "operator_id_invalid"
+    return normalized, None
 
 
 def _block_hash(value):
@@ -40,7 +80,7 @@ def _alias(label, index):
 
 
 def recheck_inclusion_multi_rpc(block_number, recorded_block_hash, recorded_chain_id,
-                                 endpoints, min_endpoints=2):
+                                 endpoints, min_endpoints=2, operator_id_format="v0"):
     """Recheck a recorded chain point using explicitly configured operators.
 
     endpoints: (alias, operator_id, query_fn) triples. query_fn(block_number)
@@ -55,6 +95,11 @@ def recheck_inclusion_multi_rpc(block_number, recorded_block_hash, recorded_chai
     underscore and hyphen (no length or start/end-character rule). Missing or
     invalid IDs and the reserved ID "unknown" do not qualify. The
     configuration's identity mapping is assumed, not authenticated.
+
+    operator_id_format: "v0" (default) uses the existing single reason code
+    ``operator_identity_unknown`` for both missing and invalid IDs. "v1"
+    splits into ``operator_id_missing`` and ``operator_id_invalid`` and
+    enforces a 1-64 character slug rule with start/end character requirements.
 
     All reachable, correct-chain, well-formed hash observations must agree,
     including multiple URLs for one operator and entries with unknown identity.
@@ -77,6 +122,8 @@ def recheck_inclusion_multi_rpc(block_number, recorded_block_hash, recorded_chai
         "quorum_operator_ids": [], "reports": reports,
         "assurance": "configured-operator-corroboration",
     }
+    if operator_id_format == "v1":
+        result["operator_id_format"] = "v1"
 
     def unknown(code, reason):
         return {**result, "reason_code": code, "reason": reason}
@@ -100,7 +147,12 @@ def recheck_inclusion_multi_rpc(block_number, recorded_block_hash, recorded_chai
             continue
         label, operator, query_fn = (entry[0], None, entry[1]) if len(entry) == 2 else entry
         report["label"] = _alias(label, index)
-        report["operator_id"] = _operator_id(operator)
+        if operator_id_format == "v1":
+            report["operator_id"], op_reason = _classify_operator_id_v1(operator)
+            if op_reason is not None:
+                report["exclusion_reason"] = op_reason
+        else:
+            report["operator_id"] = _operator_id(operator)
         if not callable(query_fn):
             report["exclusion_reason"] = "invalid_endpoint_config"
             continue
@@ -125,7 +177,7 @@ def recheck_inclusion_multi_rpc(block_number, recorded_block_hash, recorded_chai
         report["chain_view_qualifies"] = True
         report["block_hash"] = observed_hash
         report["counts_toward_quorum"] = report["operator_id"] is not None
-        if report["operator_id"] is None:
+        if report["operator_id"] is None and report.get("exclusion_reason") is None:
             report["exclusion_reason"] = "operator_identity_unknown"
 
     qualifying = [r for r in reports if r["chain_view_qualifies"]]

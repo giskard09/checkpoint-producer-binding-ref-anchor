@@ -341,5 +341,159 @@ class OperatorIdPositiveAndNonAsciiFixtures(unittest.TestCase):
         self.assertNotIn("rpc.invalid", json.dumps(result))
 
 
+class VersionedFormatV1Tests(unittest.TestCase):
+    """v1 operator_id_format tests — missing/invalid split and 1-64 slug rule.
+
+    giskard09 requested: 2-tuple, None, empty-after-trim → missing;
+    everything else that fails → invalid.  A lone ``\\n`` is invalid because
+    trim strips only space/tab, keeping the 43643cb fixture behaviour.
+    Credit: format and the missing/invalid distinction by osr21.
+    """
+
+    def check_v1(self, entries, minimum=2):
+        """Wrapper with operator_id_format=\"v1\"."""
+        return recheck_inclusion_multi_rpc(
+            HEIGHT, HASH, CHAIN, entries,
+            min_endpoints=minimum, operator_id_format="v1"
+        )
+
+    # --- missing (zero operator votes) ---
+
+    def test_v1_legacy_pair_is_missing(self):
+        result = self.check_v1([("a", endpoint("a", None)[2]),
+                                ("b", endpoint("b", "provider-b")[2])])
+        self.assertEqual(result["operator_id_format"], "v1")
+        self.assertEqual(result["status"], "unknown")
+        self.assertEqual(result["reports"][0]["exclusion_reason"],
+                         "operator_id_missing")
+        self.assertIsNone(result["reports"][0]["operator_id"])
+
+    def test_v1_none_operator_is_missing(self):
+        result = self.check_v1([endpoint("a", None), endpoint("b", "provider-b")])
+        self.assertEqual(result["reports"][0]["exclusion_reason"],
+                         "operator_id_missing")
+        self.assertIsNone(result["reports"][0]["operator_id"])
+
+    def test_v1_empty_after_trim_is_missing(self):
+        for operator in ("", "  ", "\t\t", " \t "):
+            with self.subTest(operator=repr(operator)):
+                result = self.check_v1([endpoint("a", operator),
+                                        endpoint("b", "provider-b")])
+                self.assertEqual(result["reports"][0]["exclusion_reason"],
+                                 "operator_id_missing")
+                self.assertIsNone(result["reports"][0]["operator_id"])
+
+    # --- invalid (zero operator votes) ---
+
+    def test_v1_non_string_type_is_invalid(self):
+        for operator in (42, [], {}, False):
+            with self.subTest(operator=repr(operator)):
+                result = self.check_v1([endpoint("a", operator),
+                                        endpoint("b", "provider-b")])
+                self.assertEqual(result["reports"][0]["exclusion_reason"],
+                                 "operator_id_invalid")
+
+    def test_v1_non_ascii_is_invalid(self):
+        for operator in ("Straße", "K", "provider-á", "provider-a\u00a0"):
+            with self.subTest(operator=operator):
+                result = self.check_v1([endpoint("a", operator),
+                                        endpoint("b", "provider-b")])
+                self.assertEqual(result["reports"][0]["exclusion_reason"],
+                                 "operator_id_invalid")
+
+    def test_v1_reserved_unknown_is_invalid(self):
+        for operator in ("unknown", " UNKNOWN ", "UnKnOwN"):
+            with self.subTest(operator=operator):
+                result = self.check_v1([endpoint("a", operator),
+                                        endpoint("b", "provider-b")])
+                self.assertEqual(result["reports"][0]["exclusion_reason"],
+                                 "operator_id_invalid")
+
+    # --- 1-64 slug rule ---
+
+    def test_v1_slug_length_bounds(self):
+        ok_1 = "a"
+        ok_64 = "a" + "." * 62 + "z"
+        too_long = "a" + "." * 63 + "z"
+        for operator, expected_valid in ((ok_1, True), (ok_64, True),
+                                         ("", False), (too_long, False)):
+            with self.subTest(operator=repr(operator), valid=expected_valid):
+                result = self.check_v1([endpoint("a", operator),
+                                        endpoint("b", "provider-b")])
+                if expected_valid:
+                    self.assertEqual(result["reports"][0]["operator_id"],
+                                     operator.lower())
+                    self.assertIsNone(result["reports"][0].get("exclusion_reason"))
+                else:
+                    self.assertIsNone(result["reports"][0]["operator_id"])
+
+    def test_v1_slug_start_end_chars(self):
+        # Must start and end with letter or digit
+        valid = ("provider-a", "a", "0", "a.b", "a-b", "a_b", "0a0")
+        invalid = (".a", "-a", "_a", "a.", "a-", "a_", "")
+        for operator in valid:
+            with self.subTest(operator=operator, case="valid"):
+                result = self.check_v1([endpoint("a", operator),
+                                        endpoint("b", "provider-b")])
+                self.assertIsNotNone(result["reports"][0]["operator_id"])
+        for operator in invalid:
+            with self.subTest(operator=repr(operator), case="invalid"):
+                result = self.check_v1([endpoint("a", operator),
+                                        endpoint("b", "provider-b")])
+                self.assertIsNone(result["reports"][0]["operator_id"])
+
+    def test_v1_trailing_lf_is_invalid_not_missing(self):
+        """A lone ``\\n`` is invalid because trim strips only space/tab.
+
+        ``provider-a\\n`` is also invalid (fails slug regex fullmatch).
+        This keeps the 43643cb fixture behaviour.
+        """
+        for operator in ("provider-a\n", "\n"):
+            with self.subTest(operator=repr(operator)):
+                result = self.check_v1([endpoint("a", operator),
+                                        endpoint("b", "provider-b")])
+                self.assertIsNone(result["reports"][0]["operator_id"])
+                self.assertEqual(result["reports"][0]["exclusion_reason"],
+                                 "operator_id_invalid")
+
+    def test_v1_works_with_existing_fixtures(self):
+        """v1 is strictly additive — accepted IDs work the same as v0."""
+        result = self.check_v1([endpoint("a", "provider-a"),
+                                endpoint("b", "provider-b")])
+        self.assertEqual(result["status"], "included")
+        self.assertEqual(result["operator_ids_qualifying"],
+                         ["provider-a", "provider-b"])
+
+    def test_v1_punctuation_variants_stay_distinct(self):
+        result = self.check_v1([endpoint("a", "provider.a"),
+                                endpoint("b", "provider-a")])
+        self.assertEqual(result["status"], "included")
+        self.assertEqual(result["operators_qualifying"], 2)
+
+    def test_v1_bad_chain_and_rpc_errors_preserve_operator_classification(self):
+        """A query_error should not overwrite a correctly-classified operator."""
+        fail = Mock(side_effect=TimeoutError("timeout"))
+        result = self.check_v1([endpoint("a", "provider-a"),
+                                ("bad", None, fail)])
+        self.assertEqual(result["reports"][0]["exclusion_reason"], None)
+        self.assertEqual(result["reports"][0]["operator_id"], "provider-a")
+        self.assertEqual(result["reports"][1]["exclusion_reason"], "query_error")
+        self.assertIsNone(result["reports"][1]["operator_id"])
+
+    def test_v1_output_contains_format_version(self):
+        result = self.check_v1([endpoint("a", "provider-a"),
+                                endpoint("b", "provider-b")])
+        self.assertEqual(result["operator_id_format"], "v1")
+
+    def test_v0_default_behaviour_is_unchanged(self):
+        """Calling without operator_id_format defaults to v0."""
+        default = check([endpoint("a", None), endpoint("b", "provider-b")])
+        self.assertNotIn("operator_id_format", default)
+        self.assertEqual(
+            [r["exclusion_reason"] for r in default["reports"]],
+            ["operator_identity_unknown", None]
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -114,6 +114,14 @@ The result separates `endpoints_queried`, `endpoints_qualifying`, and
 `quorum_operator_ids` only when a verdict is reached. `reports` lists safe
 aliases, normalized IDs and exclusion codes such as `query_error`,
 `wrong_chain_id`, `invalid_block_hash`, and `operator_identity_unknown`.
+When `operator_id_format="v1"` is passed, the old
+``operator_identity_unknown`` is split into ``operator_id_missing`` (no
+identity supplied: legacy 2‑tuple, ``None``, empty/whitespace-only after
+trim) and ``operator_id_invalid`` (identity supplied but rejected:
+non‑string type, non‑ASCII, fails the 1‑64‑character slug rule, or
+reserved word ``unknown``).  Credit for the format and the
+missing/invalid distinction:
+[osr21](https://github.com/osr21).
 Use non-secret aliases; URL-like labels are replaced with positional
 aliases, and raw exception messages are not echoed because RPC errors
 can contain API credentials.
