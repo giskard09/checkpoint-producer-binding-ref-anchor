@@ -386,7 +386,7 @@ class VersionedFormatV1Tests(unittest.TestCase):
     # --- invalid (zero operator votes) ---
 
     def test_v1_non_string_type_is_invalid(self):
-        for operator in (42, [], {}, False):
+        for operator in (42, [], {}, False, ("a", "b")):
             with self.subTest(operator=repr(operator)):
                 result = self.check_v1([endpoint("a", operator),
                                         endpoint("b", "provider-b")])
@@ -470,8 +470,8 @@ class VersionedFormatV1Tests(unittest.TestCase):
         self.assertEqual(result["status"], "included")
         self.assertEqual(result["operators_qualifying"], 2)
 
-    def test_v1_bad_chain_and_rpc_errors_preserve_operator_classification(self):
-        """A query_error should not overwrite a correctly-classified operator."""
+    def test_v1_rpc_errors_take_precedence_over_operator_classification(self):
+        """A query_error takes precedence over operator classification (same as v0)."""
         fail = Mock(side_effect=TimeoutError("timeout"))
         result = self.check_v1([endpoint("a", "provider-a"),
                                 ("bad", None, fail)])
@@ -493,6 +493,19 @@ class VersionedFormatV1Tests(unittest.TestCase):
             [r["exclusion_reason"] for r in default["reports"]],
             ["operator_identity_unknown", None]
         )
+
+    def test_v1_bad_format_value_is_rejected(self):
+        """An unknown operator_id_format returns invalid_operator_id_format."""
+        for bad in ("V1", "v2", ""):
+            with self.subTest(format=repr(bad)):
+                result = recheck_inclusion_multi_rpc(
+                    HEIGHT, HASH, CHAIN,
+                    [endpoint("a", "a"), endpoint("b", "b")],
+                    min_endpoints=2, operator_id_format=bad
+                )
+                self.assertEqual(result["reason_code"],
+                                 "invalid_operator_id_format")
+                self.assertIn("must be 'v0' or 'v1'", result["reason"])
 
 
 if __name__ == "__main__":

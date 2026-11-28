@@ -32,7 +32,7 @@ def _classify_operator_id_v1(value):
     """v1 canonicalizer: returns (normalized_id_or_None, exclusion_reason_or_None).
 
     Splits the old ``operator_identity_unknown`` into two distinct codes:
-    ``operator_id_missing`` — no identity supplied (2‑tuple form, ``None``,
+    ``operator_id_missing`` — no identity supplied (``None``,
     empty or whitespace-only after trimming ASCII space/tab).
     ``operator_id_invalid`` — identity supplied but rejected (non‑string type,
     non‑ASCII, fails the 1‑64‑character slug rule, or reserved word ``unknown``).
@@ -40,8 +40,6 @@ def _classify_operator_id_v1(value):
     rejects it), which keeps the 43643cb fixture behaviour.
     """
     # --- missing ---
-    if isinstance(value, tuple):
-        return None, "operator_id_missing"
     if value is None:
         return None, "operator_id_missing"
     if not isinstance(value, str):
@@ -100,6 +98,12 @@ def recheck_inclusion_multi_rpc(block_number, recorded_block_hash, recorded_chai
     ``operator_identity_unknown`` for both missing and invalid IDs. "v1"
     splits into ``operator_id_missing`` and ``operator_id_invalid`` and
     enforces a 1-64 character slug rule with start/end character requirements.
+    Any other value returns ``invalid_operator_id_format``.
+
+    RPC and chain errors (query_error, wrong_chain_id, malformed_response,
+    invalid_block_hash) take precedence over the operator classification
+    reason, matching v0 behaviour: an endpoint that fails at the network or
+    chain layer reports the network/chain error, not the operator reason.
 
     All reachable, correct-chain, well-formed hash observations must agree,
     including multiple URLs for one operator and entries with unknown identity.
@@ -122,11 +126,15 @@ def recheck_inclusion_multi_rpc(block_number, recorded_block_hash, recorded_chai
         "quorum_operator_ids": [], "reports": reports,
         "assurance": "configured-operator-corroboration",
     }
-    if operator_id_format == "v1":
-        result["operator_id_format"] = "v1"
 
     def unknown(code, reason):
         return {**result, "reason_code": code, "reason": reason}
+
+    if operator_id_format not in ("v0", "v1"):
+        return unknown("invalid_operator_id_format",
+                       f"operator_id_format must be 'v0' or 'v1', got {operator_id_format!r}")
+    if operator_id_format == "v1":
+        result["operator_id_format"] = "v1"
 
     if type(min_endpoints) is not int or min_endpoints < 1:
         return unknown("invalid_min_endpoints", "min_endpoints must be a positive integer operator threshold")
